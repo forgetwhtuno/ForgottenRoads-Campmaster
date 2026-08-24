@@ -1,5 +1,23 @@
 # Changelog — Erenshor Campmaster
 
+## Unreleased — living-camp implementation
+
+- Routed Hunt Camp fallback-panel start/end actions through the same Campmaster event presentation used by `/camp here` and `/camp clear`; successful actions now acknowledge exactly once and failures show the control policy's actual reason.
+- Repaired permanent `ActiveGameplay` caused by the current PvP control API being mistaken for an unknown competitive state, and stopped persisted native target references from counting as a current pull operation. Exact activity reasons and bounded age diagnostics are now exposed to consumers and logs.
+- Added a pure deterministic social-activity classifier and automatic Relax context after 60 seconds of verified ready, stationary, out-of-combat local-party downtime. Combat, meaningful travel, scene/readiness loss, optional PvP/Duel activity, and native pull activity exit or block automatic Relax; state transitions are diagnosed without chat spam.
+- Automatic Relax is social context only and never starts living-camp activities. Explicit `/relax here` remains authoritative and can promote an automatic session to manual ownership; only explicit Relax and source-proven Hunt Camp continue to run deterministic living activities.
+- Extended schema-3/social-v1 context additively with activity state, stationary/out-of-combat/activity ages, recognition source, and `autoRelaxActive`. No hard Deep Sims, PvP, or Duel dependency was added.
+- Grounded minor disagreements as participant-vs-group facts. They remain generic unless current Campmaster preparation state supports the bounded `preparation` subject; route, destination, quest, loot, and grievance subjects are never synthesized.
+- Formalized the existing Campmaster-owned presentation mapping: watch/observation is informational (`lightblue`), disagreement/tension is warning (`yellow`), and preparation/status is neutral (`grey`). Additive wire fields expose counterpart, subject category/source, and presentation category without changing schema 3 or living/social contract versions.
+- Added a pure deterministic living-camp tracker for Hunt Camp and Relax. Verified local party Sims receive visible contextual activities such as watch, rest, equipment care, training/socializing (Relax), and travel preparation. No native Sim action/animation/movement/item/stat API is called.
+- Added deterministic camp events, bounded living event history, and a clearly labeled Campmaster preparation context (not a native buff).
+- Combat immediately interrupts all contextual activity ownership; Hunt Camp native pulling also takes priority before combat starts. Unreadable/remote/dead/missing participants are released fail-closed, and cancel/session replacement/plugin disable clean all ownership.
+- Extended the retained fallback panel with participant activities, preparation/recent event status, and an explicit End Hunt Camp control.
+- Preserved `CampmasterApi.SchemaVersion = 3`; added optional living snapshot fields plus `GetLivingEventsAfter(...)`, `LivingLatestEventSequence`, and `LivingOldestRetainedEventSequence` as an additive reflection-friendly contract.
+- Added reflection-only Journal Chronicle posting for notable watch/disagreement events. Deep Sims remains optional and existing schema-3 Hunt Camp/Relax consumers remain compatible.
+- Added deterministic living-camp tests for selection, admission, combat/native-pull interruption, participant removal, cancel, scene/session replacement, repeated sessions, event bounds, and source integration contracts.
+
+
 ## Unreleased — native Lunaris migration
 
 - Converted the plugin host from BepInEx (`BaseUnityPlugin`/`[BepInPlugin]`/`[BepInProcess]`) to

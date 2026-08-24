@@ -55,11 +55,32 @@ namespace ErenshorCampmaster
             failures += Check(lines, "long verified combat emits derived rough encounter seed", RoughEncounterEmitsSeed());
             failures += Check(lines, "actual Manage Roles snapshot is exposed as verified seed", RoleSnapshotUsesNativeAssignments());
 
+            List<string> living = CampLivingDeterministicTests.Run();
+            for (int i = 0; i < living.Count; i++)
+            {
+                lines.Add(living[i]);
+                if (living[i].IndexOf("FAIL", StringComparison.Ordinal) >= 0) failures++;
+            }
+
             List<string> relax = RelaxDeterministicTests.Run();
             for (int i = 0; i < relax.Count; i++)
             {
                 lines.Add(relax[i]);
                 if (relax[i].IndexOf("FAIL", StringComparison.Ordinal) >= 0) failures++;
+            }
+
+            List<string> socialActivity = SocialActivityDeterministicTests.Run();
+            for (int i = 0; i < socialActivity.Count; i++)
+            {
+                lines.Add(socialActivity[i]);
+                if (socialActivity[i].IndexOf("FAIL", StringComparison.Ordinal) >= 0) failures++;
+            }
+
+            List<string> activityFreshness = SocialActivityFreshnessDeterministicTests.Run();
+            for (int i = 0; i < activityFreshness.Count; i++)
+            {
+                lines.Add(activityFreshness[i]);
+                if (activityFreshness[i].IndexOf("FAIL", StringComparison.Ordinal) >= 0) failures++;
             }
 
             lines.Add(failures == 0

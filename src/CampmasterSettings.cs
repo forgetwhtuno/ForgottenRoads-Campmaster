@@ -53,5 +53,17 @@ namespace ErenshorCampmaster
         [Config("PartyLossGraceSeconds", "Relax",
             "Grace period for temporary party churn before an active Relax session ends.")]
         public double RelaxPartyLossGraceSeconds = 12.0;
+
+        [Config("AutoRelax", "Relax",
+            "Automatically expose social Relax context after sustained safe stationary party downtime. This never moves actors or changes gameplay.")]
+        public bool AutoRelaxEnabled = true;
+
+        [Config("AutoRelaxSeconds", "Relax",
+            "Seconds of verified stationary, ready, out-of-combat party downtime required before automatic Relax context begins.")]
+        public double AutoRelaxSeconds = 60.0;
+
+        [Config("ExtendedDowntimeSeconds", "Relax",
+            "Seconds of uninterrupted safe stationary downtime before the social activity context becomes ExtendedDowntime.")]
+        public double ExtendedDowntimeSeconds = 240.0;
     }
 }

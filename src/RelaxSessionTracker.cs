@@ -18,6 +18,7 @@ namespace ErenshorCampmaster
         private CampVector3? _anchor;
         private List<string> _party = new List<string>();
         private CampAuthority _authority = CampAuthority.Unknown;
+        private RelaxRecognitionSource _recognitionSource = RelaxRecognitionSource.Explicit;
         private long _latestSequence;
         private int _eventOrdinal;
         private CampVector3? _pendingStartAnchor;
@@ -38,12 +39,26 @@ namespace ErenshorCampmaster
         }
 
         internal RelaxSessionState State { get { return _state; } }
+        internal RelaxRecognitionSource RecognitionSource { get { return _recognitionSource; } }
         internal long LatestSequence { get { return _latestSequence; } }
         internal long OldestRetainedSequence { get { return _events.Count == 0 ? 0L : _events[0].Sequence; } }
 
+        internal bool PromoteAutomaticToExplicit()
+        {
+            if (!IsActive || _recognitionSource != RelaxRecognitionSource.Automatic) return false;
+            _recognitionSource = RelaxRecognitionSource.Explicit;
+            return true;
+        }
+
         internal void RequestStart(CampVector3? anchor)
         {
+            RequestStart(anchor, RelaxRecognitionSource.Explicit);
+        }
+
+        internal void RequestStart(CampVector3? anchor, RelaxRecognitionSource source)
+        {
             _pendingStartAnchor = anchor;
+            _recognitionSource = source;
             _pendingStart = true;
             _pendingStop = false;
         }
@@ -148,6 +163,7 @@ namespace ErenshorCampmaster
             snap.Anchor = _anchor;
             snap.Party = Copy(_party);
             snap.Authority = _authority;
+            snap.RecognitionSource = _recognitionSource;
             if (_startedUtc.HasValue && IsActive)
                 snap.ElapsedSeconds = Math.Max(0.0, (nowUtc - _startedUtc.Value).TotalSeconds);
             return snap;
@@ -185,7 +201,9 @@ namespace ErenshorCampmaster
             _outsideSinceUtc = null;
             _partyMissingSinceUtc = null;
             _sessionId = "relax-" + nowUtc.ToString("yyyyMMddHHmmss") + "-" + (++_eventOrdinal).ToString();
-            Emit(RelaxEventType.RelaxStarted, nowUtc, "player explicitly chose Relax Here");
+            Emit(RelaxEventType.RelaxStarted, nowUtc, _recognitionSource == RelaxRecognitionSource.Automatic
+                ? "safe stationary downtime entered automatic Relax"
+                : "player explicitly chose Relax Here");
         }
 
         private void End(DateTime nowUtc, string detail)
@@ -198,6 +216,7 @@ namespace ErenshorCampmaster
             _anchor = null;
             _party.Clear();
             _authority = CampAuthority.Unknown;
+            _recognitionSource = RelaxRecognitionSource.Explicit;
             _outsideSinceUtc = null;
             _partyMissingSinceUtc = null;
         }
@@ -212,6 +231,7 @@ namespace ErenshorCampmaster
             evt.Type = type;
             evt.Zone = _zone;
             evt.Detail = detail ?? string.Empty;
+            evt.RecognitionSource = _recognitionSource;
             evt.PartyNames = Copy(_party);
             _events.Add(evt);
             while (_events.Count > MaxEvents) _events.RemoveAt(0);
@@ -237,6 +257,7 @@ namespace ErenshorCampmaster
             evt.Zone = source.Zone;
             evt.Detail = source.Detail;
             evt.PartyNames = Copy(source.PartyNames);
+            evt.RecognitionSource = source.RecognitionSource;
             return evt;
         }
     }

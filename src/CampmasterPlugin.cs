@@ -9,14 +9,14 @@ using ForgottenRoads.StandaloneUi;
 namespace ErenshorCampmaster
 {
     // ---------------------------------------------------------------------
-    // Erenshor Campmaster - Phase 4: Hunt Camp observation + explicit Relax downtime.
+    // Erenshor Campmaster: read-only Hunt Camp observation + deterministic living camp context.
     //
     // This mod observes. It does not assign roles, toggle Auto Pull, pick
     // targets, attack, heal, move Sims, loot, travel, or otherwise play
     // Erenshor. Removing it changes nothing about native behaviour.
     // ---------------------------------------------------------------------
     [LunarisPlugin(PluginGuid, PluginVersion, "forgetwhtuno",
-        "Read-only Hunt Camp observation and explicit Relax downtime context. Does not assign roles, toggle Auto Pull, pick targets, or otherwise play Erenshor.")]
+        "Read-only Hunt Camp observation plus deterministic living camp activities/events. Native party AI and gameplay remain authoritative.")]
     [LunarisPermission(LunarisPermission.Reflection | LunarisPermission.Harmony)]
     public sealed class CampmasterPlugin : LunarisPlugin
     {
@@ -30,11 +30,16 @@ namespace ErenshorCampmaster
         private Harmony _harmony;
         private CampSessionTracker _tracker;
         private RelaxSessionTracker _relaxTracker;
+        private CampLivingActivityTracker _livingTracker;
+        private SocialActivityTracker _socialActivityTracker;
+        private SocialActivitySnapshot _socialActivitySnapshot;
         private float _nextPollSeconds;
         private CampObservation _lastObservation;
         private int _readFailureLogCount;
         private int _pendingControlRelax;
         private CampmasterSuiteAuraProvider _auraProvider;
+        private DateTime _nextActivityDiagnosticUtc = DateTime.MinValue;
+        private string _lastActivityDiagnosticSignature = string.Empty;
 
         // Native state is polled at a low fixed rate. Nothing here belongs on
         // a per-frame path.
@@ -42,7 +47,9 @@ namespace ErenshorCampmaster
 
         internal CampSessionTracker Tracker { get { return _tracker; } }
         internal RelaxSessionTracker RelaxTracker { get { return _relaxTracker; } }
+        internal CampLivingActivityTracker LivingTracker { get { return _livingTracker; } }
         internal CampObservation LastObservation { get { return _lastObservation; } }
+        internal SocialActivitySnapshot SocialActivitySnapshot { get { return _socialActivitySnapshot; } }
         internal void RequestRelaxHereFromControl() { _pendingControlRelax = 1; }
         internal void RequestRelaxOffFromControl() { _pendingControlRelax = 2; }
 
@@ -97,6 +104,11 @@ namespace ErenshorCampmaster
             relaxConfig.DepartureGraceSeconds = _settings.RelaxDepartureGraceSeconds;
             relaxConfig.PartyLossGraceSeconds = _settings.RelaxPartyLossGraceSeconds;
             _relaxTracker = new RelaxSessionTracker(relaxConfig);
+            _livingTracker = new CampLivingActivityTracker();
+            SocialActivityConfig socialConfig = new SocialActivityConfig();
+            socialConfig.SocialDowntimeSeconds = Math.Max(45.0, Math.Min(90.0, _settings.AutoRelaxSeconds));
+            socialConfig.ExtendedDowntimeSeconds = Math.Max(socialConfig.SocialDowntimeSeconds, _settings.ExtendedDowntimeSeconds);
+            _socialActivityTracker = new SocialActivityTracker(socialConfig);
 
             _harmony = new Harmony(PluginGuid);
             try
@@ -117,16 +129,19 @@ namespace ErenshorCampmaster
             catch (Exception ex)
             {
                 try { if (_auraProvider != null) _auraProvider.Unregister(); } catch { }
+                _auraProvider = null;
                 Logging.LogError("Campmaster Suite Aura provider failed to register: " + ex.GetType().Name);
             }
 
-            Logging.LogInfo("Erenshor Campmaster 0.4.0 loaded. Hunt Camp remains read-only; explicit Relax is available with /relax here|off|status.");
+            Logging.LogInfo("Erenshor Campmaster 0.4.0 loaded. Hunt Camp remains read-only; Relax/living-camp activities are deterministic Campmaster context and never drive native actors.");
             StandaloneFallbackUi.Initialize(this, "campmaster", "CAMPMASTER",
-                "Declare a camp or start explicit downtime here. Native party/combat state remains authoritative.", 200f,
+                "Declare a camp or start explicit downtime here. Native party/combat state remains authoritative.", 200f, 70f,
                 CampmasterControlApi.GetStatus,
-                new FallbackAction("Hunt Camp Here", delegate { string failure; return CampmasterControlApi.TryDeclareHere(out failure); }, null),
+                new FallbackAction("Hunt Camp Here", delegate { return TryUiDeclareHuntCamp(); }, null),
                 new FallbackAction("Relax Here", delegate { string failure; return CampmasterControlApi.TryRelaxHere(out failure); }, null),
+                new FallbackAction("End Hunt Camp", delegate { return TryUiEndHuntCamp(); }, null),
                 new FallbackAction("End Relax", delegate { string failure; return CampmasterControlApi.TryRelaxOff(out failure); }, null));
+            StandaloneFallbackUi.ConfigureWorkspaceDefaults(225f, 0.97f, 0.93f, 0);
         }
 
         private void Update()
@@ -145,6 +160,9 @@ namespace ErenshorCampmaster
 
                 DateTime now = DateTime.UtcNow;
                 CampObservation obs = NativeGroupStateReader.Read(now);
+                obs.GameplayReady = SuiteUiPolicy.IsGameplayReady();
+                obs.PvpActive = OptionalCompetitiveStateReader.ReadPvpActive();
+                obs.DuelActive = OptionalCompetitiveStateReader.ReadDuelActive();
                 _lastObservation = obs;
 
                 if (!obs.ReadSucceeded && _readFailureLogCount < 3)
@@ -154,8 +172,28 @@ namespace ErenshorCampmaster
                 }
 
                 long relaxBefore = _relaxTracker == null ? 0L : _relaxTracker.LatestSequence;
+                CampSocialActivityState priorActivity = _socialActivitySnapshot == null
+                    ? CampSocialActivityState.ActiveGameplay : _socialActivitySnapshot.State;
+                _socialActivitySnapshot = _socialActivityTracker == null ? null : _socialActivityTracker.Tick(obs, now);
+                ApplyAutomaticRelax(obs, now);
                 if (_relaxTracker != null) _relaxTracker.Tick(obs, now);
                 ReportNewRelaxEvents(relaxBefore);
+                if (_socialActivitySnapshot != null)
+                {
+                    string signature = _socialActivitySnapshot.State + "|" + (_socialActivitySnapshot.Reason ?? "unknown");
+                    if (priorActivity != _socialActivitySnapshot.State ||
+                        !string.Equals(signature, _lastActivityDiagnosticSignature, StringComparison.Ordinal) ||
+                        now >= _nextActivityDiagnosticUtc)
+                    {
+                        _lastActivityDiagnosticSignature = signature;
+                        _nextActivityDiagnosticUtc = now.AddSeconds(30.0);
+                        Logging.LogInfo("[Campmaster][Activity] state=" + _socialActivitySnapshot.State +
+                            " reason=" + (_socialActivitySnapshot.Reason ?? "unknown") +
+                            " stationary=" + Math.Round(_socialActivitySnapshot.SecondsStationary) + "s outOfCombat=" +
+                            Math.Round(_socialActivitySnapshot.SecondsOutOfCombat) + "s meaningfulAge=" +
+                            Math.Round(_socialActivitySnapshot.SecondsSinceMeaningfulGameplay) + "s");
+                    }
+                }
 
                 // Relax and Hunt Camp are mutually exclusive downtime intents. While Relax is
                 // active, do not let the Hunt Camp auto-recognizer create a second session.
@@ -165,6 +203,10 @@ namespace ErenshorCampmaster
                     _tracker.Tick(obs, now);
                     ReportNewEvents(before);
                 }
+
+                long livingBefore = _livingTracker == null ? 0L : _livingTracker.LatestSequence;
+                TickLivingActivities(obs, now);
+                ReportNewLivingEvents(livingBefore);
             }
             catch (Exception ex)
             {
@@ -172,9 +214,29 @@ namespace ErenshorCampmaster
             }
         }
 
+        private void ApplyAutomaticRelax(CampObservation obs, DateTime nowUtc)
+        {
+            if (_relaxTracker == null || _socialActivitySnapshot == null) return;
+            bool automaticActive = _relaxTracker.IsActive && _relaxTracker.RecognitionSource == RelaxRecognitionSource.Automatic;
+            if (_relaxTracker.IsActive && !automaticActive) return; // explicit player intent always wins
+
+            bool eligible = _settings != null && _settings.AutoRelaxEnabled && _socialActivitySnapshot.SafeForAutoRelax &&
+                (_socialActivitySnapshot.State == CampSocialActivityState.SocialDowntime ||
+                 _socialActivitySnapshot.State == CampSocialActivityState.ExtendedDowntime);
+            if (automaticActive && !eligible)
+            {
+                _relaxTracker.RequestStop("automatic Relax ended: " + (_socialActivitySnapshot.Reason ?? "activity resumed"));
+                return;
+            }
+            if (!_relaxTracker.IsActive && eligible && obs != null && obs.PlayerPosition.HasValue)
+                _relaxTracker.RequestStart(obs.PlayerPosition, RelaxRecognitionSource.Automatic);
+        }
+
         private void OnDestroy()
         {
             StandaloneFallbackUi.Dispose();
+            try { if (_livingTracker != null) _livingTracker.Stop(DateTime.UtcNow, "plugin disabled"); } catch { }
+            _livingTracker = null;
             try { if (_auraProvider != null) _auraProvider.Unregister(); } catch { }
             _auraProvider = null;
             try { CoopCompatibility.Shutdown(); } catch { }
@@ -183,6 +245,50 @@ namespace ErenshorCampmaster
             _harmony = null;
             _pendingControlRelax = 0;
             Instance = null;
+        }
+
+        private void TickLivingActivities(CampObservation obs, DateTime nowUtc)
+        {
+            if (_livingTracker == null) return;
+            if (_relaxTracker != null && _relaxTracker.IsActive)
+            {
+                RelaxSnapshot relax = _relaxTracker.BuildSnapshot(nowUtc);
+                if (relax.RecognitionSource == RelaxRecognitionSource.Automatic)
+                {
+                    // Auto Relax is social context only. It must not create living-camp activities;
+                    // those remain explicit Relax or source-proven Hunt Camp behavior.
+                    _livingTracker.Tick(CampLivingMode.None, string.Empty, false, obs, nowUtc);
+                    return;
+                }
+                _livingTracker.Tick(CampLivingMode.Relax, relax.SessionId, relax.IsActive, obs, nowUtc);
+                return;
+            }
+            if (_tracker != null && _tracker.IsActive)
+            {
+                CampSnapshot camp = _tracker.BuildSnapshot(nowUtc);
+                _livingTracker.Tick(CampLivingMode.HuntCamp, camp.SessionId, camp.IsActive, obs, nowUtc);
+                return;
+            }
+            _livingTracker.Tick(CampLivingMode.None, string.Empty, false, obs, nowUtc);
+        }
+
+        private void ReportNewLivingEvents(long afterSequence)
+        {
+            if (_livingTracker == null || _livingTracker.LatestSequence <= afterSequence) return;
+            List<CampLivingEvent> events = _livingTracker.GetEventsAfter(afterSequence);
+            for (int i = 0; i < events.Count; i++)
+            {
+                CampLivingEvent evt = events[i];
+                if (evt == null || !evt.Meaningful) continue;
+                OptionalJournalBridge.TryPost(evt);
+                string color = evt.PresentationCategory == CampPresentationCategory.Informational ? "lightblue" :
+                    evt.PresentationCategory == CampPresentationCategory.Warning ? "yellow" : "grey";
+                Logging.LogInfo("[Campmaster][LivingEvent] type=" + evt.Type + " participant=" + (evt.ParticipantName ?? "none") +
+                    " counterpart=" + (evt.Counterpart ?? "none") + " subject=" + (evt.SubjectCategory ?? "none") +
+                    " subjectSource=" + (evt.SubjectSource ?? "none") + " presentationCategory=" +
+                    evt.PresentationCategory.ToString().ToLowerInvariant());
+                Chat("[Camp] " + evt.Detail, color);
+            }
         }
 
         private void ReportNewEvents(long afterSequence)
@@ -195,10 +301,12 @@ namespace ErenshorCampmaster
                 switch (evt.Type)
                 {
                     case CampEventType.CampStarted:
-                        Chat("[Camp] Hunt camp started in " + Describe(evt.Zone) + " (" + evt.Detail + ").", "lightblue");
+                        CampActionPresentationResult started = CampActionPresentation.HuntStart(true, null, Describe(evt.Zone));
+                        Chat(started.Text, started.Color);
                         break;
                     case CampEventType.CampEnded:
-                        Chat("[Camp] Hunt camp ended: " + evt.Detail + ".", "lightblue");
+                        CampActionPresentationResult ended = CampActionPresentation.HuntEnd(true, null, evt.Detail);
+                        Chat(ended.Text, ended.Color);
                         break;
                     case CampEventType.CampSuspended:
                         Chat("[Camp] Hunt camp suspended: " + evt.Detail + ".", "yellow");
@@ -220,8 +328,13 @@ namespace ErenshorCampmaster
                 switch (evt.Type)
                 {
                     case RelaxEventType.RelaxStarted:
+                        if (evt.RecognitionSource == RelaxRecognitionSource.Automatic)
+                        {
+                            Logging.LogInfo("[Campmaster][AutoRelax] state=entered reason=safe_stationary_downtime");
+                            break;
+                        }
                         Chat("[Relax] Relax started in " + Describe(evt.Zone) + ".", "lightblue");
-                        Chat("[Relax] Social context only: Campmaster did not move, guard, heal, or otherwise control the party.", "grey");
+                        Chat("[Relax] Campmaster will assign visible deterministic camp activities. It still does not move, guard, heal, animate, consume items, or otherwise control the party.", "grey");
                         break;
                     case RelaxEventType.RelaxSuspended:
                         Chat("[Relax] Suspended for combat.", "yellow");
@@ -230,6 +343,11 @@ namespace ErenshorCampmaster
                         Chat("[Relax] Resumed after combat.", "lightblue");
                         break;
                     case RelaxEventType.RelaxEnded:
+                        if (evt.RecognitionSource == RelaxRecognitionSource.Automatic)
+                        {
+                            Logging.LogInfo("[Campmaster][AutoRelax] state=exited reason=" + (evt.Detail ?? "activity_resumed"));
+                            break;
+                        }
                         Chat("[Relax] Relax ended: " + evt.Detail + ".", "lightblue");
                         break;
                 }
@@ -244,6 +362,34 @@ namespace ErenshorCampmaster
                 try { UpdateSocialLog.LogAdd(message); }
                 catch { }
             }
+        }
+
+        private bool TryUiDeclareHuntCamp()
+        {
+            long before = _tracker == null ? 0 : _tracker.LatestSequence;
+            string failure;
+            bool success = CampmasterControlApi.TryDeclareHere(out failure);
+            ReportNewEvents(before);
+            if (!success || _tracker == null || _tracker.LatestSequence <= before)
+            {
+                CampActionPresentationResult result = CampActionPresentation.HuntStart(success, failure, null);
+                Chat(result.Text, result.Color);
+            }
+            return success;
+        }
+
+        private bool TryUiEndHuntCamp()
+        {
+            long before = _tracker == null ? 0 : _tracker.LatestSequence;
+            string failure;
+            bool success = CampmasterControlApi.TryClearHuntCamp(out failure);
+            ReportNewEvents(before);
+            if (!success || _tracker == null || _tracker.LatestSequence <= before)
+            {
+                CampActionPresentationResult result = CampActionPresentation.HuntEnd(success, failure, success ? "no active context remained" : null);
+                Chat(result.Text, result.Color);
+            }
+            return success;
         }
 
         internal void LogPatchError(Exception ex)
@@ -311,6 +457,11 @@ namespace ErenshorCampmaster
             }
             if (_relaxTracker.IsActive)
             {
+                if (_relaxTracker.PromoteAutomaticToExplicit())
+                {
+                    Chat("[Relax] Automatic downtime is now an explicit Relax session.", "lightblue");
+                    return;
+                }
                 Chat("[Relax] Relax is already active.", "yellow");
                 return;
             }
@@ -379,6 +530,7 @@ namespace ErenshorCampmaster
 
             Chat("RELAX - " + Describe(snap.Zone) + " - " + FormatDuration(snap.ElapsedSeconds), "lightblue");
             Chat("  State: " + snap.State, snap.State == RelaxSessionState.SuspendedForCombat ? "yellow" : "grey");
+            Chat("  Recognition: " + (snap.RecognitionSource == RelaxRecognitionSource.Automatic ? "Auto" : "Manual"), "grey");
             if (snap.Party != null && snap.Party.Count > 0)
                 Chat("  Party: " + string.Join(", ", snap.Party.ToArray()), "grey");
             Chat("  Authority: " + snap.Authority, "grey");
@@ -513,7 +665,7 @@ namespace ErenshorCampmaster
             _tracker.Tick(obs, nowUtc);
             ReportNewEvents(before);
             if (_tracker.IsActive)
-                Chat("[Camp] Context only: Campmaster did not change roles, Auto Pull, targets, or movement.", "grey");
+                Chat("[Camp] Living camp routines are active. Campmaster did not change roles, Auto Pull, targets, movement, inventory, or native stats.", "grey");
             else
                 Chat("[Camp] Hunt Camp could not be established from the fresh local party state.", "yellow");
         }

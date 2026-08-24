@@ -37,6 +37,12 @@ namespace ErenshorCampmaster
                 ReadPullState(obs, grouping);
                 ReadHoldingForMana(obs, grouping);
                 ReadGuardAnchor(obs, grouping);
+                // Only the native pull lifecycle is current activity evidence. ForcePullTarget is
+                // retained storage: current Assembly-CSharp sets it in IndivPull and does not clear
+                // it when that one-shot pull completes. A populated selected/forced/old target is
+                // therefore context, never a level-triggered "the player is still active" signal.
+                obs.MeaningfulGameplayActivity = NativeMeaningfulActivityPolicy.Resolve(obs.PullerActivelyPulling,
+                    obs.CurrentPullTargetName, obs.ForcePullTargetName, out obs.MeaningfulGameplayReason);
 
                 obs.ReadSucceeded = true;
             }
@@ -72,14 +78,22 @@ namespace ErenshorCampmaster
                 obs.PartyNames.Add(name);
                 obs.PartyPresent = true;
 
+                CampParticipantObservation participant = new CampParticipantObservation();
+                participant.Name = name;
+                participant.StableId = SafeTrackingId(tracking);
+                obs.Participants.Add(participant);
+
                 SimPlayer sim = SafeAvatar(tracking);
                 if (sim == null) { obs.UnresolvedMembers++; continue; }
+                participant.KnownDead = IsKnownDead(sim);
                 if (CoopCompatibility.IsRemoteCoopHuman(sim) || CoopCompatibility.IsRemoteCoopSim(sim))
                 {
+                    participant.Remote = true;
                     obs.RemoteMembers++;
                     continue;
                 }
                 if (!IsUsableLocalPartySim(sim)) { obs.UnresolvedMembers++; continue; }
+                participant.LocalUsable = true;
                 obs.LocalResolvedMembers++;
             }
 
@@ -175,6 +189,9 @@ namespace ErenshorCampmaster
         // so a visibility/signature drift fails closed instead of breaking the
         // whole plugin build against a neighboring Erenshor version.
         // -----------------------------------------------------------------
+        private static readonly FieldInfo SimIndexField =
+            typeof(SimPlayerTracking).GetField("simIndex", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+
         private static readonly FieldInfo CurrentPullPhaseField =
             typeof(SimPlayer).GetField("CurrentPullPhase", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
         private static readonly FieldInfo PullTargetField =
@@ -444,11 +461,24 @@ namespace ErenshorCampmaster
             try
             {
                 if (sim == null || sim.gameObject == null || !sim.gameObject.activeInHierarchy) return false;
-                if (sim.MyStats == null || sim.MyStats.Myself == null) return false;
+                if (sim.MyStats == null || sim.MyStats.Myself == null || !sim.MyStats.Myself.Alive) return false;
                 if (!sim.InGroup) return false;
                 return GameData.SimPlayerGrouping != null && GameData.SimPlayerGrouping.IsSimInPlayerGroup(sim);
             }
             catch { return false; }
+        }
+
+        private static bool IsKnownDead(SimPlayer sim)
+        {
+            try { return sim != null && sim.MyStats != null && sim.MyStats.Myself != null && !sim.MyStats.Myself.Alive; }
+            catch { return false; }
+        }
+
+        private static int SafeTrackingId(SimPlayerTracking tracking)
+        {
+            if (tracking == null || SimIndexField == null) return -1;
+            try { return Convert.ToInt32(SimIndexField.GetValue(tracking)); }
+            catch { return -1; }
         }
 
         private static SimPlayer SafeAvatar(SimPlayerTracking tracking)

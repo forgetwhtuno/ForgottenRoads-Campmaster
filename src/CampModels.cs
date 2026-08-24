@@ -113,6 +113,15 @@ namespace ErenshorCampmaster
         }
     }
 
+    internal sealed class CampParticipantObservation
+    {
+        internal int StableId = -1;
+        internal string Name;
+        internal bool LocalUsable;
+        internal bool Remote;
+        internal bool KnownDead;
+    }
+
     // One deterministic read of native state. Every optional native fact is
     // nullable so "unknown" can never be confused with a real value.
     internal sealed class CampObservation
@@ -126,6 +135,7 @@ namespace ErenshorCampmaster
         internal string Zone;                       // GameData.SceneName
         internal bool PartyPresent;                 // >=1 tracked party member
         internal List<string> PartyNames = new List<string>();
+        internal List<CampParticipantObservation> Participants = new List<CampParticipantObservation>();
         internal int LocalResolvedMembers;          // trackings with a usable local SimPlayer
         internal int UnresolvedMembers;             // tracking present, avatar unusable
         internal int RemoteMembers;                 // COOP-owned entries
@@ -174,6 +184,11 @@ namespace ErenshorCampmaster
         internal CampVector3? PlayerPosition;
         internal bool? InCombat;                    // GameData.InCombat
         internal bool? RaidActive;                  // GameData.RaidActive
+        internal bool GameplayReady;                // SuiteUiPolicy readiness, sampled with this observation
+        internal bool? PvpActive;                   // optional contract; null means installed state unreadable
+        internal bool? DuelActive;                  // optional contract; null means installed state unreadable
+        internal bool MeaningfulGameplayActivity;   // verified interaction signal when one is available
+        internal string MeaningfulGameplayReason;   // privacy-safe current signal token; never target/chat text
 
         internal bool HasParty { get { return PartyPresent && PartyNames.Count > 0; } }
     }

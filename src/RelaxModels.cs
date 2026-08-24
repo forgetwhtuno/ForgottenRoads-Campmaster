@@ -20,6 +20,12 @@ namespace ErenshorCampmaster
         RelaxEnded
     }
 
+    internal enum RelaxRecognitionSource
+    {
+        Explicit = 0,
+        Automatic = 1
+    }
+
     internal sealed class RelaxConfig
     {
         // Classification thresholds owned by Campmaster, not native mechanics.
@@ -37,6 +43,7 @@ namespace ErenshorCampmaster
         internal RelaxEventType Type;
         internal string Zone;
         internal string Detail;
+        internal RelaxRecognitionSource RecognitionSource;
         internal List<string> PartyNames = new List<string>();
     }
 
@@ -52,6 +59,7 @@ namespace ErenshorCampmaster
         internal CampVector3? Anchor;
         internal List<string> Party = new List<string>();
         internal CampAuthority Authority = CampAuthority.Unknown;
+        internal RelaxRecognitionSource RecognitionSource = RelaxRecognitionSource.Explicit;
 
         internal bool IsActive
         {

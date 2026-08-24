@@ -1,6 +1,7 @@
 param(
     [string]$GameDir = "",
-    [string]$LunarisLibDir = ""
+    [string]$LunarisLibDir = "",
+    [switch]$BuildOnly
 )
 
 $ErrorActionPreference = "Stop"
@@ -70,7 +71,9 @@ $LunarisLibDir = Find-LunarisLibDir $LunarisLibDir $GameDir
 $csc = Find-Csc
 $managed = Join-Path $GameDir "Erenshor_Data\Managed"
 $pluginRoot = Join-Path $GameDir "plugins"
-New-Item -ItemType Directory -Force -Path $pluginRoot | Out-Null
+$buildOutput = Join-Path $ScriptRoot "build-output"
+New-Item -ItemType Directory -Force -Path $buildOutput | Out-Null
+if (-not $BuildOnly) { New-Item -ItemType Directory -Force -Path $pluginRoot | Out-Null }
 
 $refs = @(
     (Join-Path $LunarisLibDir "Lunaris.dll"),
@@ -96,6 +99,7 @@ New-Item -ItemType Directory -Force -Path $TempDir | Out-Null
 $TempDll = Join-Path $TempDir "ErenshorCampmaster.dll"
 $rsp = Join-Path $TempDir "ErenshorCampmaster.rsp"
 $out = Join-Path $pluginRoot "ErenshorCampmaster.dll"
+$candidate = Join-Path $buildOutput "ErenshorCampmaster.dll"
 
 try {
     $lines = @(
@@ -123,10 +127,21 @@ try {
     }
     if (-not (Test-Path $TempDll)) { throw "Compiler reported success but did not produce $TempDll" }
 
-    Copy-Item -LiteralPath $TempDll -Destination $out -Force
+    Copy-Item -LiteralPath $TempDll -Destination $candidate -Force
 }
 finally {
     if (Test-Path $TempDir) { Remove-Item -LiteralPath $TempDir -Recurse -Force -ErrorAction SilentlyContinue }
 }
 
+$builtHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $candidate).Hash.ToLowerInvariant()
+Write-Host "  Candidate: $candidate"
+Write-Host "  SHA256:    $builtHash"
+if ($BuildOnly) {
+    Write-Host "Campmaster compiled successfully (BuildOnly - nothing installed)." -ForegroundColor Green
+    exit 0
+}
+Copy-Item -LiteralPath $candidate -Destination $out -Force
+$installedHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $out).Hash.ToLowerInvariant()
+if ($installedHash -ne $builtHash) { throw "Installed Campmaster DLL hash does not match the fresh candidate." }
 Write-Host "Installed Erenshor Campmaster to $out" -ForegroundColor Green
+Write-Host "  Installed SHA256: $installedHash"

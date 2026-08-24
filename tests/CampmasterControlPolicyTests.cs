@@ -29,6 +29,9 @@ namespace ErenshorCampmaster
             Check("Suite auto-recognition setting routes", DescriptorSettingRoutes());
             Check("Suite invalid setting values reject", DescriptorSettingRejectsInvalid());
             Check("control API mutates only Campmaster recognition", ApiSetsAutoRecognition());
+            Check("Hunt Camp UI success presentation is visible", CampActionPresentation.HuntStart(true, null, "Brasse").Text.Contains("started in Brasse"));
+            Check("Hunt Camp UI failure presentation is visible", CampActionPresentation.HuntStart(false, "No party is currently detected.", null).Text.Contains("No party"));
+            Check("End Hunt Camp presentation shares event wording", CampActionPresentation.HuntEnd(true, null, "cleared by player").Text.Contains("ended: cleared by player"));
             Check("Suite status is bounded", DescriptorStatusBounded());
             Check("Suite descriptor excludes sensitive fields", DescriptorPrivacySafe());
             Check("Suite advertises fallback panel and only existing Relax actions", DescriptorActionsAreRelaxOnly());
@@ -230,6 +233,7 @@ namespace ErenshorCampmaster
     {
         internal static CampmasterPlugin Instance;
         internal CampSessionTracker Tracker { get; set; }
+        internal CampLivingActivityTracker LivingTracker { get; set; }
         internal CampObservation LastObservation { get; set; }
         internal RelaxSessionTracker RelaxTracker { get; set; }
         internal void RequestRelaxHereFromControl() { if (RelaxTracker != null) RelaxTracker.RequestStart(); }
@@ -307,6 +311,11 @@ namespace ErenshorCampmaster
             LastRequestedPosition = playerPosition;
         }
 
+        internal void RequestClear()
+        {
+            IsActive = false;
+        }
+
         internal void Tick(CampObservation observation, DateTime nowUtc)
         {
             TickCount++;
@@ -323,6 +332,19 @@ namespace ErenshorCampmaster
         internal int LocalResolvedMembers;
         internal bool? RaidActive;
         internal CampVector3? PlayerPosition;
+        internal bool InCombat;
+        internal bool PullerActivelyPulling;
+        internal System.Collections.Generic.List<CampParticipantObservation> Participants =
+            new System.Collections.Generic.List<CampParticipantObservation>();
+    }
+
+    internal sealed class CampParticipantObservation
+    {
+        internal int StableId = -1;
+        internal string Name;
+        internal bool LocalUsable;
+        internal bool Remote;
+        internal bool KnownDead;
     }
 
     internal struct CampVector3

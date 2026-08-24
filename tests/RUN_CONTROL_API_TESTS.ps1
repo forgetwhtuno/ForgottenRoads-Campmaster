@@ -20,6 +20,8 @@ $sourceFiles = @(
     (Join-Path $modRoot "src\CampmasterControlPolicy.cs"),
     (Join-Path $modRoot "src\CampmasterSuiteDescriptorPolicy.cs"),
     (Join-Path $modRoot "src\CampmasterControlApi.cs"),
+    (Join-Path $modRoot "src\CampLivingModels.cs"),
+    (Join-Path $modRoot "src\CampLivingActivityTracker.cs"),
     (Join-Path $scriptRoot "StandaloneFallbackUiStub.cs"),
     (Join-Path $scriptRoot "CampmasterControlPolicyTests.cs")
 )
@@ -29,7 +31,7 @@ $outputDir = Join-Path $env:TEMP ("CampmasterControlTests-" + [Guid]::NewGuid().
 New-Item -ItemType Directory -Path $outputDir | Out-Null
 try {
     $output = Join-Path $outputDir "CampmasterControlTests.exe"
-    $arguments = @("/nologo", "/target:exe", "/optimize+", ('/out:"{0}"' -f $output)) + $sourceFiles
+    $arguments = @("/nologo", "/target:exe", "/optimize+", ('/out:{0}' -f $output)) + $sourceFiles
     & $csc $arguments
     if ($LASTEXITCODE -ne 0) { throw "Campmaster control test compilation failed." }
     & $output

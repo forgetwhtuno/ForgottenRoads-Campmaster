@@ -3,6 +3,37 @@ using ForgottenRoads.StandaloneUi;
 
 namespace ErenshorCampmaster
 {
+    internal sealed class CampActionPresentationResult
+    {
+        internal string Text;
+        internal string Color;
+    }
+
+    internal static class CampActionPresentation
+    {
+        internal static CampActionPresentationResult HuntStart(bool success, string failure, string zone)
+        {
+            return new CampActionPresentationResult
+            {
+                Color = success ? "lightblue" : "yellow",
+                Text = success
+                    ? "[Camp] Hunt camp started" + (string.IsNullOrWhiteSpace(zone) ? "." : " in " + zone + ".")
+                    : "[Camp] Hunt Camp Here failed: " + (string.IsNullOrWhiteSpace(failure) ? "request rejected." : failure)
+            };
+        }
+
+        internal static CampActionPresentationResult HuntEnd(bool success, string failure, string detail)
+        {
+            return new CampActionPresentationResult
+            {
+                Color = success ? "lightblue" : "yellow",
+                Text = success
+                    ? "[Camp] Hunt camp ended" + (string.IsNullOrWhiteSpace(detail) ? "." : ": " + detail + ".")
+                    : "[Camp] End Hunt Camp failed: " + (string.IsNullOrWhiteSpace(failure) ? "request rejected." : failure)
+            };
+        }
+    }
+
     // Narrow OPTIONAL control surface for explicit player-invoked handoffs
     // from companion mods such as Erenshor Follow / Sim-Led Expeditions.
     //
@@ -122,9 +153,32 @@ namespace ErenshorCampmaster
         {
             CampmasterControlState state = GetBasicState();
             if (!state.Available) return "Campmaster unavailable";
-            if (state.RelaxActive) return "Relax: " + state.State;
-            if (state.HuntCampActive) return "Hunt Camp: " + state.State;
-            return "Campmaster idle";
+            string text = state.RelaxActive ? ("Relax: " + state.State) : (state.HuntCampActive ? ("Hunt Camp: " + state.State) : "Campmaster idle");
+            CampmasterPlugin plugin = CampmasterPlugin.Instance;
+            if (plugin == null || plugin.LivingTracker == null || (!state.RelaxActive && !state.HuntCampActive)) return text;
+            CampLivingSnapshot living;
+            try { living = plugin.LivingTracker.BuildSnapshot(); } catch { return text; }
+            text += "\nPreparation: " + living.Preparation.ToString() + "/12 (Campmaster context)";
+            if (living.SuspendedForCombat) text += "\nActivities: suspended for combat";
+            else if (living.Activities.Count == 0) text += "\nActivities: settling in";
+            else
+            {
+                for (int i = 0; i < living.Activities.Count && i < 5; i++)
+                {
+                    CampLivingActivity activity = living.Activities[i];
+                    if (activity == null) continue;
+                    text += "\n" + (activity.ParticipantName ?? ("Sim #" + activity.StableId.ToString())) + " - " + CampLivingActivityTracker.DescribeActivity(activity.Type);
+                }
+            }
+            int shown = 0;
+            for (int i = living.RecentEvents.Count - 1; i >= 0 && shown < 2; i--)
+            {
+                CampLivingEvent evt = living.RecentEvents[i];
+                if (evt == null || !evt.Meaningful || string.IsNullOrEmpty(evt.Detail)) continue;
+                text += "\nRecent: " + evt.Detail;
+                shown++;
+            }
+            return text;
         }
 
         public static bool AutoRecognitionEnabled
@@ -145,6 +199,26 @@ namespace ErenshorCampmaster
 
         public static bool OpenPanel() { return StandaloneFallbackUi.Open(); }
         public static bool ClosePanel() { return StandaloneFallbackUi.Close(); }
+
+        public static bool TryClearHuntCamp(out string failure)
+        {
+            failure = null;
+            CampmasterPlugin plugin = CampmasterPlugin.Instance;
+            CampSessionTracker tracker = plugin == null ? null : plugin.Tracker;
+            if (tracker == null) { failure = "Campmaster is unavailable."; return false; }
+            if (!tracker.IsActive) return true;
+            DateTime nowUtc = DateTime.UtcNow;
+            CampObservation observation = NativeGroupStateReader.Read(nowUtc);
+            try
+            {
+                tracker.RequestClear();
+                tracker.Tick(observation, nowUtc);
+                if (tracker.IsActive) { failure = "Campmaster could not clear the Hunt Camp context."; return false; }
+                if (plugin.LivingTracker != null) plugin.LivingTracker.Tick(CampLivingMode.None, string.Empty, false, observation, nowUtc);
+                return true;
+            }
+            catch (Exception ex) { failure = "Campmaster could not clear the Hunt Camp context (" + ex.GetType().Name + ")."; return false; }
+        }
 
         public static bool TryRelaxHere(out string failure)
         {
